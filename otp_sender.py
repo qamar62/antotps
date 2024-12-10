@@ -67,33 +67,54 @@ def send_telegram_message(bot_token, chat_id, message):
     """Send Telegram message with error handling"""
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     
+    # First, verify bot token and get bot information
+    try:
+        get_me_url = f"https://api.telegram.org/bot{bot_token}/getMe"
+        bot_info = requests.get(get_me_url, timeout=CONFIG['TIMEOUT'])
+        if bot_info.status_code != 200:
+            log_and_print(f"Invalid bot token or bot not accessible. Status: {bot_info.status_code}", 'error')
+            return False
+        log_and_print(f"Bot verification successful: {bot_info.json()['result']['username']}")
+    except Exception as e:
+        log_and_print(f"Bot verification failed: {e}", 'error')
+        return False
+
+    # Ensure chat_id is in the correct format
+    chat_id_str = str(chat_id)
+    if chat_id_str.startswith('-100'):
+        pass  # Already in correct format for supergroup
+    elif chat_id_str.startswith('-'):
+        chat_id_str = f"-100{chat_id_str[1:]}"  # Convert to supergroup format
+    
     for attempt in range(CONFIG['MAX_RETRIES']):
         try:
             log_and_print(f"Telegram Message Sending - Attempt {attempt + 1}")
             
             response = requests.post(
                 url, 
-                json={'chat_id': chat_id, 'text': message},
+                json={
+                    'chat_id': chat_id_str,
+                    'text': message,
+                    'parse_mode': 'HTML'
+                },
                 timeout=CONFIG['TIMEOUT']
             )
             
             log_and_print(f"Response Status: {response.status_code}")
+            response_json = response.json()
             
-            if response.status_code == 200:
-                response_json = response.json()
-                if response_json.get('ok', False):
-                    log_and_print("Message sent successfully")
-                    return True
-                else:
-                    log_and_print(f"Telegram API returned error: {response_json}", 'warning')
+            if response.status_code == 200 and response_json.get('ok', False):
+                log_and_print("Message sent successfully")
+                return True
             else:
-                log_and_print(f"HTTP Error: {response.status_code}", 'error')
+                error_description = response_json.get('description', 'Unknown error')
+                log_and_print(f"Telegram API Error: {error_description}", 'error')
         
         except requests.exceptions.RequestException as req_err:
             log_and_print(f"Network Request Error: {req_err}", 'error')
         
         except Exception as e:
-            log_and_print(f"Unexpected Error: {e}", 'error')
+            log_and_print(f"Unexpected Error: {str(e)}", 'error')
         
         # Wait before retry
         time.sleep(CONFIG['RETRY_DELAY'])
@@ -157,8 +178,15 @@ def main():
     
     log_and_print("Starting OTP Sender")
     
+    # Updated bot token and chat ID format
     bot_token = '7426554501:AAG0b0XsIqKIL1sXFevZjOw4qdYzIKeE-3o'
-    chat_id = '-4728543187'
+    chat_id = '-4728543187'  # Will be formatted in send_telegram_message
+    
+    # Verify Telegram bot setup first
+    test_message = "🤖 OTP Sender Bot is starting up..."
+    if not send_telegram_message(bot_token, chat_id, test_message):
+        log_and_print("Failed to verify Telegram bot setup. Please check your bot token and chat ID.", 'error')
+        return
     
     # Read QR code
     secret = read_qr_code(QR_CODE_FILE)
