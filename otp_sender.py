@@ -194,24 +194,62 @@ def read_qr_code(file_path):
         log_and_print(f"QR Code Reading Error: {e}", 'error')
         return None
 
-def otp_generation_thread(secret, bot_token, chat_id):
-    """Generate and send OTPs"""
-    global running
-    totp = pyotp.TOTP(secret)
-    
-    while running:
+def handle_command(command, chat_id, bot_token, totp):
+    """Handle Telegram commands"""
+    if command == '/otp':
         try:
             otp = totp.now()
             log_and_print(f"Generated OTP: {otp}")
-            
-            # Send OTP via Telegram
-            send_telegram_message(bot_token, chat_id, f"Your OTP is: {otp}")
-            
-            time.sleep(30)  # Wait between OTP generations
-        
+            message = f"🔐 Your OTP is: <code>{otp}</code>\n⏱️ Valid for 30 seconds"
+            send_telegram_message(bot_token, chat_id, message)
         except Exception as e:
-            log_and_print(f"OTP Generation/Sending Error: {e}", 'error')
-            running = False
+            log_and_print(f"Error generating OTP: {e}", 'error')
+    elif command == '/start':
+        welcome_msg = """🤖 *OTP Bot Commands*
+• /otp - Generate a new OTP
+• /help - Show this help message"""
+        send_telegram_message(bot_token, chat_id, welcome_msg)
+    elif command == '/help':
+        help_msg = """📖 *Available Commands*
+• /otp - Generate a new OTP
+• /help - Show this help message
+
+ℹ️ The OTP will be valid for 30 seconds."""
+        send_telegram_message(bot_token, chat_id, help_msg)
+
+def listen_for_commands(secret, bot_token, chat_id):
+    """Listen for Telegram commands"""
+    global running
+    totp = pyotp.TOTP(secret)
+    last_update_id = 0
+    
+    log_and_print("Listening for commands. Send /help in Telegram for available commands.")
+    
+    while running:
+        try:
+            response = requests.get(
+                f"https://api.telegram.org/bot{bot_token}/getUpdates",
+                params={
+                    'offset': last_update_id + 1,
+                    'timeout': 30
+                }
+            )
+            
+            if response.status_code == 200:
+                updates = response.json()
+                if updates.get('ok') and updates.get('result'):
+                    for update in updates['result']:
+                        if 'message' in update and 'text' in update['message']:
+                            command = update['message']['text'].lower().strip()
+                            if command.startswith('/'):
+                                handle_command(command, chat_id, bot_token, totp)
+                        last_update_id = update['update_id']
+            
+            time.sleep(1)
+            
+        except Exception as e:
+            log_and_print(f"Error in command listener: {e}", 'error')
+            time.sleep(5)  # Wait before retrying
 
 def main():
     global running
@@ -234,12 +272,6 @@ def main():
     
     log_and_print(f"Using chat ID: {chat_id}")
     
-    # Verify Telegram bot setup
-    test_message = "🤖 OTP Sender Bot is starting up..."
-    if not send_telegram_message(bot_token, chat_id, test_message):
-        log_and_print("Failed to verify Telegram bot setup. Please check your bot token and chat ID.", 'error')
-        return
-    
     # Read QR code
     secret = read_qr_code(QR_CODE_FILE)
     if not secret:
@@ -253,19 +285,27 @@ def main():
         log_and_print(f"Invalid secret: {e}", 'error')
         return
     
-    # Start OTP generation
+    # Start command listener
     running = True
-    otp_thread = threading.Thread(target=otp_generation_thread, args=(secret, bot_token, chat_id))
-    otp_thread.start()
+    command_thread = threading.Thread(
+        target=listen_for_commands,
+        args=(secret, bot_token, chat_id)
+    )
+    command_thread.start()
     
-    # Interactive stop
+    # Send startup message
+    startup_msg = """🤖 *OTP Bot is Online!*
+Send /help to see available commands."""
+    send_telegram_message(bot_token, chat_id, startup_msg)
+    
+    # Wait for stop signal
     try:
-        input("Press Enter to stop OTP generation...\n")
+        input("Press Enter to stop the bot...\n")
         running = False
-        otp_thread.join()
+        command_thread.join()
     except KeyboardInterrupt:
         running = False
-        otp_thread.join()
+        command_thread.join()
     
     log_and_print("OTP Sender Stopped")
 
