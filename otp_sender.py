@@ -123,6 +123,46 @@ def send_telegram_message(bot_token, chat_id, message):
     fallback_send_otp(message)
     return False
 
+def get_chat_id(bot_token):
+    """Get chat ID from bot updates"""
+    try:
+        # First, delete any pending updates
+        requests.get(f"https://api.telegram.org/bot{bot_token}/getUpdates?offset=-1")
+        
+        log_and_print("⚠️ Please follow these steps:")
+        log_and_print("1. Open Telegram")
+        log_and_print("2. Add the bot to your group")
+        log_and_print("3. Make the bot an admin")
+        log_and_print("4. Send a message saying '/start' in the group")
+        log_and_print("Waiting for message... (30 seconds timeout)")
+        
+        # Wait for new message
+        start_time = time.time()
+        while time.time() - start_time < 30:
+            response = requests.get(
+                f"https://api.telegram.org/bot{bot_token}/getUpdates",
+                timeout=CONFIG['TIMEOUT']
+            )
+            
+            if response.status_code == 200:
+                updates = response.json()
+                if updates.get('ok') and updates.get('result'):
+                    for update in updates['result']:
+                        if 'message' in update:
+                            chat_id = update['message']['chat']['id']
+                            chat_type = update['message']['chat']['type']
+                            chat_title = update['message']['chat'].get('title', 'Private Chat')
+                            log_and_print(f"Found chat: {chat_title} (ID: {chat_id}, Type: {chat_type})")
+                            return str(chat_id)
+            
+            time.sleep(1)
+        
+        log_and_print("No messages received within timeout", 'error')
+        return None
+    except Exception as e:
+        log_and_print(f"Error getting chat ID: {e}", 'error')
+        return None
+
 def read_qr_code(file_path):
     """Read secret from QR code"""
     try:
@@ -178,11 +218,23 @@ def main():
     
     log_and_print("Starting OTP Sender")
     
-    # Updated bot token and chat ID format
+    # Bot configuration
     bot_token = '7426554501:AAG0b0XsIqKIL1sXFevZjOw4qdYzIKeE-3o'
-    chat_id = '-4728543187'  # Will be formatted in send_telegram_message
     
-    # Verify Telegram bot setup first
+    # Get chat ID automatically
+    log_and_print("Getting chat ID...")
+    chat_id = get_chat_id(bot_token)
+    
+    if not chat_id:
+        log_and_print("Failed to get chat ID. Please make sure to:", 'error')
+        log_and_print("1. Add the bot to your group", 'error')
+        log_and_print("2. Make the bot an admin", 'error')
+        log_and_print("3. Send a message in the group", 'error')
+        return
+    
+    log_and_print(f"Using chat ID: {chat_id}")
+    
+    # Verify Telegram bot setup
     test_message = "🤖 OTP Sender Bot is starting up..."
     if not send_telegram_message(bot_token, chat_id, test_message):
         log_and_print("Failed to verify Telegram bot setup. Please check your bot token and chat ID.", 'error')
