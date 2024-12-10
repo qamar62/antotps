@@ -43,7 +43,7 @@ env/
 otp_fallback.txt
 
 # QR code and sensitive files
-qrcode.jpg
+
 *.key
 *.pem
 *.crt
