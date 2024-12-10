@@ -1,4 +1,4 @@
 pyzbar
 requests
 pyotp
-pillow
+pillows
