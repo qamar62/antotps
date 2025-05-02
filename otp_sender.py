@@ -257,7 +257,7 @@ def main():
     log_and_print("Starting OTP Sender")
     
     # Bot configuration
-    bot_token = '7426554501:AAG0b0XsIqKIL1sXFevZjOw4qdYzIKeE-3o'
+    bot_token = '7753763767:AAHSfbg1sHNsF2zfh-5j5yNoA464LaAHNuk'
     
     # Get chat ID automatically
     log_and_print("Getting chat ID...")
