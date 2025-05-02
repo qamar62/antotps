@@ -15,8 +15,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the application files
-COPY otp_sender.py .
+COPY *.py .
 COPY qrcode.jpg .
 
-# Run the application
-CMD ["python", "otp_sender.py"]
+# Run the debug script first, then run the main application
+CMD ["sh", "-c", "python debug_telegram.py && python otp_sender.py"]
