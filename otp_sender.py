@@ -23,8 +23,8 @@ QR_CODE_FILE = 'qrcode.jpg'
 
 # Hardcoded configuration
 BOT_TOKEN = '7753763767:AAHSfbg1sHNsF2zfh-5j5yNoA464LaAHNuk'
-CHAT_ID = '-1001854583762'  # Converted to supergroup format (prefix with -100)
-TIMEOUT = 10
+CHAT_ID = '-4747582386'  # Converted to supergroup format (prefix with -100)
+TIMEOUT = 30
 RETRY_DELAY = 3
 
 # Global flag to control the OTP generation loop
