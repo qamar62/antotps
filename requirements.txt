@@ -1,4 +1,4 @@
-pyzbar
-requests
-pyotp
-pillow
+requests>=2.25.0
+pyzbar>=0.1.8
+pillow>=8.0.0
+pyotp>=2.6.0
