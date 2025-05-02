@@ -3,12 +3,13 @@ import logging
 import threading
 import requests
 import base64
+import json
 from urllib.parse import urlparse, parse_qs
 from pyzbar.pyzbar import decode
 from PIL import Image
 import pyotp
 
-# Configure basic logging
+# Configure logging to both file and console
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s: %(message)s',
@@ -18,17 +19,17 @@ logging.basicConfig(
     ]
 )
 
-# QR code file path (in the same directory as the script)
+# QR code file path
 QR_CODE_FILE = 'qrcode.jpg'
 
-# Hardcoded configuration
+# Bot configuration
 BOT_TOKEN = '7753763767:AAHSfbg1sHNsF2zfh-5j5yNoA464LaAHNuk'
-CHAT_ID = '-1001854583762'  # Converted to supergroup format (prefix with -100)
-TIMEOUT = 10
-RETRY_DELAY = 3
+CHAT_ID = '-4747582386'  # We'll find the correct format dynamically
 
 # Global flag to control the OTP generation loop
 running = False
+# Store the correct chat ID once found
+correct_chat_id = None
 
 def log_message(message, level='info'):
     """Log message and print to console"""
@@ -40,48 +41,101 @@ def log_message(message, level='info'):
     elif level == 'warning':
         logging.warning(message)
 
-def send_telegram_message(message):
-    """Send Telegram message"""
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+def find_correct_chat_id():
+    """Find the correct chat ID format by testing multiple formats"""
+    global correct_chat_id
     
-    # Try multiple chat ID formats
-    chat_ids_to_try = [
-        CHAT_ID,              # Original format
-        f"-100{CHAT_ID[1:]}", # Supergroup format with -100 prefix
-        f"-{CHAT_ID[1:]}",    # Without the first dash
-        f"-1001854583762",    # Calculated ID
-        f"-4747582386"        # Original ID from URL
+    # Chat IDs to try
+    chat_ids = [
+        CHAT_ID,                 # Original format
+        '-1001854583762',        # Calculated ID
+        f"-100{CHAT_ID[1:]}",    # Adding the -100 prefix
+        CHAT_ID[1:],             # Without the minus
     ]
     
-    for chat_id in chat_ids_to_try:
-        try:
-            log_message(f"Trying to send with chat_id: {chat_id}")
-            response = requests.post(
-                url, 
-                json={
-                    'chat_id': chat_id,
-                    'text': message,
-                    'parse_mode': 'HTML'
-                },
-                timeout=TIMEOUT
-            )
-            
-            log_message(f"Response: {response.status_code} - {response.text}")
-            
-            if response.status_code == 200 and response.json().get('ok', False):
-                log_message(f"Message sent successfully with chat_id: {chat_id}")
-                return True
-        except Exception as e:
-            log_message(f"Error with chat_id {chat_id}: {e}", 'error')
+    log_message("Finding the correct chat ID format...")
     
-    log_message("Failed to send message with all chat ID formats", 'error')
-    return False
+    # Try each chat ID format
+    for chat_id in chat_ids:
+        try:
+            log_message(f"Testing chat ID: {chat_id}")
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChat"
+            response = requests.post(url, json={'chat_id': chat_id})
+            
+            if response.status_code == 200 and response.json().get('ok'):
+                chat_info = response.json()['result']
+                log_message(f"Found valid chat: {chat_info.get('title', 'Unknown')}")
+                correct_chat_id = chat_id
+                return chat_id
+            else:
+                error = response.json().get('description', 'Unknown error')
+                log_message(f"Failed with chat ID {chat_id}: {error}")
+        except Exception as e:
+            log_message(f"Error testing chat ID {chat_id}: {e}", 'error')
+    
+    log_message("Could not find a valid chat ID format.", 'error')
+    return None
+
+def verify_bot():
+    """Verify that the bot token is valid"""
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getMe"
+        response = requests.get(url)
+        if response.status_code == 200 and response.json().get('ok'):
+            bot_info = response.json()['result']
+            log_message(f"Bot verified: @{bot_info['username']}")
+            return True
+        log_message("Invalid bot token", 'error')
+        return False
+    except Exception as e:
+        log_message(f"Bot verification error: {e}", 'error')
+        return False
+
+def send_telegram_message(message):
+    """Send Telegram message"""
+    global correct_chat_id
+    
+    # If we haven't found the correct chat ID yet, try to find it
+    if correct_chat_id is None:
+        correct_chat_id = find_correct_chat_id()
+        if correct_chat_id is None:
+            log_message("Could not find a valid chat ID. Using default format.", 'error')
+            correct_chat_id = CHAT_ID
+    
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    
+    try:
+        response = requests.post(
+            url, 
+            json={
+                'chat_id': correct_chat_id,
+                'text': message,
+                'parse_mode': 'HTML'
+            },
+            timeout=10
+        )
+        
+        # Log the full response for debugging
+        log_message(f"API Response: {json.dumps(response.json(), indent=2)}")
+        
+        if response.status_code == 200 and response.json().get('ok'):
+            log_message("Message sent successfully!")
+            return True
+        else:
+            error = response.json().get('description', 'Unknown error')
+            log_message(f"Message sending failed: {error}", 'error')
+            # If chat not found, try to find the correct ID again next time
+            if "chat not found" in error.lower():
+                correct_chat_id = None
+            return False
+    except Exception as e:
+        log_message(f"Error sending message: {e}", 'error')
+        return False
 
 def read_qr_code():
     """Read secret from QR code"""
     try:
         log_message(f"Reading QR code from: {QR_CODE_FILE}")
-        
         image = Image.open(QR_CODE_FILE)
         decoded_objects = decode(image)
         
@@ -91,7 +145,6 @@ def read_qr_code():
         
         for obj in decoded_objects:
             uri = obj.data.decode('utf-8')
-            
             parsed_uri = urlparse(uri)
             query_params = parse_qs(parsed_uri.query)
             
@@ -102,41 +155,17 @@ def read_qr_code():
         
         log_message("No secret found in QR code", 'error')
         return None
-    
     except Exception as e:
         log_message(f"QR Code reading error: {e}", 'error')
         return None
 
-def handle_command(command, totp):
-    """Handle Telegram commands"""
-    if command == '/otp':
-        try:
-            otp = totp.now()
-            log_message(f"Generated OTP: {otp}")
-            message = f"🔐 Your OTP is: <code>{otp}</code>\n⏱️ Valid for 30 seconds"
-            send_telegram_message(message)
-        except Exception as e:
-            log_message(f"Error generating OTP: {e}", 'error')
-    elif command == '/start':
-        welcome_msg = """🤖 *OTP Bot Commands*
-• /otp - Generate a new OTP
-• /help - Show this help message"""
-        send_telegram_message(welcome_msg)
-    elif command == '/help':
-        help_msg = """📖 *Available Commands*
-• /otp - Generate a new OTP
-• /help - Show this help message
-
-ℹ️ The OTP will be valid for 30 seconds."""
-        send_telegram_message(help_msg)
-
-def listen_for_commands(secret):
-    """Listen for Telegram commands"""
+def listen_for_updates(secret):
+    """Listen for Telegram updates"""
     global running
     totp = pyotp.TOTP(secret)
     last_update_id = 0
     
-    log_message("Listening for commands. Send /help in Telegram for available commands.")
+    log_message("Listening for commands...")
     
     while running:
         try:
@@ -150,72 +179,39 @@ def listen_for_commands(secret):
             
             if response.status_code == 200:
                 updates = response.json()
-                if updates.get('ok') and updates.get('result'):
+                if updates.get('ok') and updates['result']:
                     for update in updates['result']:
+                        last_update_id = update['update_id']
+                        
                         if 'message' in update and 'text' in update['message']:
                             command = update['message']['text'].lower().strip()
-                            if command.startswith('/'):
-                                handle_command(command, totp)
-                        last_update_id = update['update_id']
+                            chat_id = update['message']['chat']['id']
+                            
+                            # Store this chat ID if we found one that works
+                            global correct_chat_id
+                            if correct_chat_id is None:
+                                correct_chat_id = str(chat_id)
+                                log_message(f"Found working chat ID from update: {correct_chat_id}")
+                            
+                            log_message(f"Received command: {command} from chat {chat_id}")
+                            
+                            if command == '/otp':
+                                otp = totp.now()
+                                log_message(f"Generated OTP: {otp}")
+                                message = f"🔐 Your OTP is: <code>{otp}</code>\n⏱️ Valid for 30 seconds"
+                                send_telegram_message(message)
+                            elif command == '/start' or command == '/help':
+                                help_msg = """📖 OTP Bot Commands:
+• /otp - Generate a new OTP code
+• /help - Show this help message
+
+The OTP is valid for 30 seconds."""
+                                send_telegram_message(help_msg)
             
             time.sleep(1)
-            
         except Exception as e:
-            log_message(f"Error in command listener: {e}", 'error')
-            time.sleep(5)  # Wait before retrying
-
-def verify_bot_permissions():
-    """Verify that the bot has the necessary permissions"""
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getMe"
-        response = requests.get(url, timeout=TIMEOUT)
-        log_message(f"Bot check response: {response.status_code} - {response.text}")
-        
-        if response.status_code == 200:
-            bot_info = response.json()
-            if bot_info.get('ok'):
-                log_message(f"Bot verification successful - @{bot_info['result']['username']}")
-                return True
-        
-        log_message("Bot verification failed", 'error')
-        return False
-    except Exception as e:
-        log_message(f"Bot verification error: {e}", 'error')
-        return False
-
-def get_chat_info():
-    """Get information about the chat to verify access"""
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChat"
-    
-    chat_ids_to_try = [
-        CHAT_ID,
-        f"-100{CHAT_ID[1:]}",
-        f"-{CHAT_ID[1:]}",
-        f"-1001854583762",
-        f"-4747582386"
-    ]
-    
-    for chat_id in chat_ids_to_try:
-        try:
-            log_message(f"Getting info for chat_id: {chat_id}")
-            response = requests.post(
-                url,
-                json={'chat_id': chat_id},
-                timeout=TIMEOUT
-            )
-            
-            log_message(f"Response: {response.status_code} - {response.text}")
-            
-            if response.status_code == 200:
-                chat_info = response.json()
-                if chat_info.get('ok'):
-                    log_message(f"Found valid chat: {chat_info['result'].get('title', 'Unknown')}")
-                    log_message(f"Chat type: {chat_info['result'].get('type', 'Unknown')}")
-                    return chat_id
-        except Exception as e:
-            log_message(f"Error getting chat info for {chat_id}: {e}", 'error')
-    
-    return None
+            log_message(f"Error in update listener: {e}", 'error')
+            time.sleep(5)
 
 def main():
     global running
@@ -223,17 +219,18 @@ def main():
     log_message("Starting OTP Sender Bot")
     
     # Verify bot token
-    if not verify_bot_permissions():
-        log_message("Bot verification failed. Please check your token.", 'error')
+    if not verify_bot():
+        log_message("Bot verification failed. Check your token.", 'error')
         return
     
-    # Get valid chat ID
-    valid_chat_id = get_chat_info()
-    if valid_chat_id:
-        log_message(f"Using chat ID: {valid_chat_id}")
+    # Try to find the correct chat ID format
+    global correct_chat_id
+    correct_chat_id = find_correct_chat_id()
+    
+    if correct_chat_id:
+        log_message(f"Found correct chat ID format: {correct_chat_id}")
     else:
-        log_message("Failed to find a valid chat. Please check the chat ID.", 'error')
-        log_message("Continuing anyway with the configured ID...", 'warning')
+        log_message("Could not find correct chat ID format. Will try different formats.", 'warning')
     
     # Read QR code
     secret = read_qr_code()
@@ -248,31 +245,34 @@ def main():
         log_message(f"Invalid secret: {e}", 'error')
         return
     
-    # Start command listener
+    # Start update listener
     running = True
-    command_thread = threading.Thread(
-        target=listen_for_commands,
+    listener_thread = threading.Thread(
+        target=listen_for_updates,
         args=(secret,)
     )
-    command_thread.daemon = True
-    command_thread.start()
+    listener_thread.daemon = True
+    listener_thread.start()
     
     # Send startup message
-    startup_msg = "🤖 OTP Bot is Online! Send /help to see available commands."
+    startup_msg = "🤖 OTP Bot is Online! Send /otp to generate a one-time password."
     send_telegram_message(startup_msg)
     
-    # Generate a test OTP immediately
-    handle_command('/otp', pyotp.TOTP(secret))
+    # Generate an initial OTP
+    totp = pyotp.TOTP(secret)
+    otp = totp.now()
+    log_message(f"Initial OTP: {otp}")
+    initial_otp_msg = f"🔐 Initial OTP: <code>{otp}</code>\n⏱️ Valid for 30 seconds"
+    send_telegram_message(initial_otp_msg)
     
-    # Wait for stop signal
+    # Main loop - keep generating OTPs periodically
     try:
-        print("Bot is running. Press Ctrl+C to stop...")
+        log_message("Bot is running. Press Ctrl+C to stop...")
         while running:
             time.sleep(1)
     except KeyboardInterrupt:
         running = False
         log_message("Stopping bot...")
-        time.sleep(1)  # Give the command thread time to finish
     
     log_message("OTP Sender Bot Stopped")
 
