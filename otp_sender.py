@@ -44,28 +44,38 @@ def send_telegram_message(message):
     """Send Telegram message"""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     
-    try:
-        response = requests.post(
-            url, 
-            json={
-                'chat_id': CHAT_ID,
-                'text': message,
-                'parse_mode': 'HTML'
-            },
-            timeout=TIMEOUT
-        )
-        
-        if response.status_code == 200 and response.json().get('ok', False):
-            log_message("Message sent successfully")
-            return True
-        else:
-            error_description = response.json().get('description', 'Unknown error')
-            log_message(f"Telegram error: {error_description}", 'error')
-            return False
+    # Try multiple chat ID formats
+    chat_ids_to_try = [
+        CHAT_ID,              # Original format
+        f"-100{CHAT_ID[1:]}", # Supergroup format with -100 prefix
+        f"-{CHAT_ID[1:]}",    # Without the first dash
+        f"-1001854583762",    # Calculated ID
+        f"-4747582386"        # Original ID from URL
+    ]
+    
+    for chat_id in chat_ids_to_try:
+        try:
+            log_message(f"Trying to send with chat_id: {chat_id}")
+            response = requests.post(
+                url, 
+                json={
+                    'chat_id': chat_id,
+                    'text': message,
+                    'parse_mode': 'HTML'
+                },
+                timeout=TIMEOUT
+            )
             
-    except Exception as e:
-        log_message(f"Error sending message: {e}", 'error')
-        return False
+            log_message(f"Response: {response.status_code} - {response.text}")
+            
+            if response.status_code == 200 and response.json().get('ok', False):
+                log_message(f"Message sent successfully with chat_id: {chat_id}")
+                return True
+        except Exception as e:
+            log_message(f"Error with chat_id {chat_id}: {e}", 'error')
+    
+    log_message("Failed to send message with all chat ID formats", 'error')
+    return False
 
 def read_qr_code():
     """Read secret from QR code"""
@@ -154,10 +164,76 @@ def listen_for_commands(secret):
             log_message(f"Error in command listener: {e}", 'error')
             time.sleep(5)  # Wait before retrying
 
+def verify_bot_permissions():
+    """Verify that the bot has the necessary permissions"""
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getMe"
+        response = requests.get(url, timeout=TIMEOUT)
+        log_message(f"Bot check response: {response.status_code} - {response.text}")
+        
+        if response.status_code == 200:
+            bot_info = response.json()
+            if bot_info.get('ok'):
+                log_message(f"Bot verification successful - @{bot_info['result']['username']}")
+                return True
+        
+        log_message("Bot verification failed", 'error')
+        return False
+    except Exception as e:
+        log_message(f"Bot verification error: {e}", 'error')
+        return False
+
+def get_chat_info():
+    """Get information about the chat to verify access"""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChat"
+    
+    chat_ids_to_try = [
+        CHAT_ID,
+        f"-100{CHAT_ID[1:]}",
+        f"-{CHAT_ID[1:]}",
+        f"-1001854583762",
+        f"-4747582386"
+    ]
+    
+    for chat_id in chat_ids_to_try:
+        try:
+            log_message(f"Getting info for chat_id: {chat_id}")
+            response = requests.post(
+                url,
+                json={'chat_id': chat_id},
+                timeout=TIMEOUT
+            )
+            
+            log_message(f"Response: {response.status_code} - {response.text}")
+            
+            if response.status_code == 200:
+                chat_info = response.json()
+                if chat_info.get('ok'):
+                    log_message(f"Found valid chat: {chat_info['result'].get('title', 'Unknown')}")
+                    log_message(f"Chat type: {chat_info['result'].get('type', 'Unknown')}")
+                    return chat_id
+        except Exception as e:
+            log_message(f"Error getting chat info for {chat_id}: {e}", 'error')
+    
+    return None
+
 def main():
     global running
     
     log_message("Starting OTP Sender Bot")
+    
+    # Verify bot token
+    if not verify_bot_permissions():
+        log_message("Bot verification failed. Please check your token.", 'error')
+        return
+    
+    # Get valid chat ID
+    valid_chat_id = get_chat_info()
+    if valid_chat_id:
+        log_message(f"Using chat ID: {valid_chat_id}")
+    else:
+        log_message("Failed to find a valid chat. Please check the chat ID.", 'error')
+        log_message("Continuing anyway with the configured ID...", 'warning')
     
     # Read QR code
     secret = read_qr_code()
@@ -184,6 +260,9 @@ def main():
     # Send startup message
     startup_msg = "🤖 OTP Bot is Online! Send /help to see available commands."
     send_telegram_message(startup_msg)
+    
+    # Generate a test OTP immediately
+    handle_command('/otp', pyotp.TOTP(secret))
     
     # Wait for stop signal
     try:
